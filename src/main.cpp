@@ -1,13 +1,15 @@
 #include <Arduino.h>
 
-#define PIN_RC_PWM_IN PB2
-#define PIN_DIR_OUT_F PB4
-#define PIN_DIR_OUT_R PB3
-#define PIN_PWM_ANALOG_OUT PB0
-#define PIN_LED PB1
-#define DEADZONE_US 50
-#define PIN_BRAKE PB5
-#define PWM_MAX_PERIOD 100
+#define PIN_RC_PWM_IN       PD2
+#define PIN_DIR_OUT_F       PD3
+#define PIN_DIR_OUT_R       PD4
+#define PIN_BRAKE           PD5
+#define PIN_PWM_ANALOG_OUT  PD6
+#define PIN_LED             PB5
+#define PIN_DEADZONE_ADJ    PC0
+#define PIN_TRIM_ADJ        PC1
+#define DEADZONE_US         50
+#define PWM_MAX_PERIOD      100
 
 unsigned long RC_ts;
 unsigned long Safety_ts;
@@ -17,6 +19,8 @@ volatile unsigned long PWM_time = 0;
 volatile unsigned long PWM_rise_time = 0;
 bool PWM_complete = false;
 bool failsafe = false;
+uint16_t deadzone_adjust = 0;
+int16_t trim_adjust = 0;
 
 void PWM_rising();
 void PWM_falling();
@@ -28,6 +32,8 @@ void brake_release();
 void setup() {
     // put your setup code here, to run once:
     pinMode(PIN_RC_PWM_IN, INPUT);
+    pinMode(PIN_DEADZONE_ADJ, INPUT);
+    pinMode(PIN_TRIM_ADJ, INPUT);
     pinMode(PIN_DIR_OUT_F, OUTPUT);
     pinMode(PIN_DIR_OUT_R, OUTPUT);
     pinMode(PIN_PWM_ANALOG_OUT, OUTPUT);
@@ -37,6 +43,7 @@ void setup() {
     attachInterrupt(0, PWM_rising, RISING);
 }
 
+// Raising PWM interrupt
 void PWM_rising() {
     PWM_rise_time = micros();
     attachInterrupt(0, PWM_falling, FALLING);
@@ -44,6 +51,7 @@ void PWM_rising() {
     led_on();
 }
 
+// Falling PWM interrupt
 void PWM_falling() {
     PWM_time = micros() - PWM_rise_time;
     attachInterrupt(0, PWM_rising, RISING);
@@ -53,6 +61,11 @@ void PWM_falling() {
 }
 
 void loop() {
+
+    // Get pot readings 
+    deadzone_adjust = analogRead(PIN_DEADZONE_ADJ)/6.82; // 0-150
+    trim_adjust = (analogRead(PIN_TRIM_ADJ) - 512)/3.41; // +-150
+
     if (PWM_complete) {
         PWM_complete = false;
         Safety_ts = millis();
@@ -60,20 +73,19 @@ void loop() {
         // Sanity check (PWM time)
         if (PWM_time < 500 || PWM_time > 2500) {
             PWM_value = 0;
-            
             led_on();
         }
         // Get PWM value (-1000...1000)
         else {
-            PWM_value = (int16_t)1500 - PWM_time;
+            PWM_value = (int16_t)1500 - PWM_time + trim_adjust;
         }
 
         // Deadzone
-        if (abs(PWM_value) < DEADZONE_US) {
+        if (abs(PWM_value) < deadzone_adjust) {
             speed = 0;
             brake_set();
         } else {
-            speed = (float)((PWM_value - DEADZONE_US) / 400.0);
+            speed = (float)((PWM_value - deadzone_adjust) / 400.0);
             brake_release();
         }
 
@@ -84,6 +96,7 @@ void loop() {
             speed = -1.0;
     }
 
+    // Safety/failsafe
     if (millis() - Safety_ts > PWM_MAX_PERIOD) {
       failsafe = true;
     }
